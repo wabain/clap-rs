@@ -8,7 +8,7 @@ fn main() {
     let matches = App::new("myprog")
         .arg(Arg::new("eff").short("f"))
         .arg(Arg::new("pea").short("p").set(ArgSettings::TakesValue))
-        .arg(Arg::new("slop").multiple(true))
+        .arg(Arg::new("slop").multiple(true).set(ArgSettings::Last))
         .get_matches();
 
 

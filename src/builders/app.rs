@@ -163,6 +163,10 @@ impl<'a, 'b> App<'a, 'b> {
     /// name from its `Cargo.toml`.
     ///
     /// # Examples
+    ///
+    /// The following example shows how to load a properly formatted YAML file to build an instance
+    /// of an [`App`] struct.
+    ///
     /// ```ignore
     /// # #[macro_use]
     /// # extern crate clap;
