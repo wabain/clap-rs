@@ -559,12 +559,14 @@ impl<'a> ArgMatches<'a> {
     ///         .use_delimiter(true)
     ///         .multiple(true))
     ///     .get_matches_from(vec!["myapp", "-o=val1,val2,val3"]);
-    ///             // ARGV idices: ^0       ^1
-    ///             // clap idices:             ^2   ^3   ^4
-    ///             //
-    ///             // clap sees the above as 'myapp -o val1 val2 val3'
-    ///             //                         ^0    ^1 ^2   ^3   ^4
+    ///            // ARGV indices: ^0       ^1
+    ///            // clap indices:             ^2   ^3   ^4
+    ///            //
+    ///            // clap sees the above as 'myapp -o val1 val2 val3'
+    ///            //                         ^0    ^1 ^2   ^3   ^4
+    ///
     /// assert_eq!(m.indices_of("option").unwrap().collect::<Vec<_>>(), &[2, 3, 4]);
+    /// assert_eq!(m.source_indices_of("option").unwrap().collect::<Vec<_>>(), &[1, 1, 1]);
     /// ```
     ///
     /// Another quick example is when flags and options are used together
@@ -580,15 +582,18 @@ impl<'a> ArgMatches<'a> {
     ///         .short("f")
     ///         .multiple(true))
     ///     .get_matches_from(vec!["myapp", "-o", "val1", "-f", "-o", "val2", "-f"]);
-    ///             // ARGV idices: ^0       ^1    ^2      ^3    ^4    ^5      ^6
-    ///             // clap idices:                ^2      ^3          ^5      ^6
+    ///            // ARGV indices: ^0       ^1    ^2      ^3    ^4    ^5      ^6
+    ///            // clap indices:                ^2      ^3          ^5      ^6
     ///
     /// assert_eq!(m.indices_of("option").unwrap().collect::<Vec<_>>(), &[2, 5]);
+    /// assert_eq!(m.source_indices_of("option").unwrap().collect::<Vec<_>>(), &[2, 5]);
+    ///
     /// assert_eq!(m.indices_of("flag").unwrap().collect::<Vec<_>>(), &[3, 6]);
+    /// assert_eq!(m.source_indices_of("flag").unwrap().collect::<Vec<_>>(), &[3, 6]);
     /// ```
     ///
     /// One final example, which is an odd case; if we *don't* use  value delimiter as we did with
-    /// the first example above instead of `val1`, `val2` and `val3` all being distinc values, they
+    /// the first example above instead of `val1`, `val2` and `val3` all being distinct values, they
     /// would all be a single value of `val1,val2,val3`, in which case case they'd only receive a
     /// single index.
     ///
@@ -623,25 +628,42 @@ impl<'a> ArgMatches<'a> {
         None
     }
 
-    #[allow(missing_docs)]
+    /// Gets the first index of the argument in respect to where it occurred in
+    /// the input argv array.
+    ///
+    /// *NOTE:* If an argument is allowed multiple times, this method will only give the *first*
+    /// index. Use [`ArgMatches::source_indices_of`] to obtain all indices.
+    ///
+    /// See [`ArgMatches::index_of`] for usage examples and more details.
+    ///
+    /// [`ArgMatches::source_indices_of`]: ./struct.ArgMatches.html#method.index_of
+    /// [`ArgMatches::index_of`]: ./struct.ArgMatches.html#method.index_of
     pub fn source_index_of<S: AsRef<str>>(&self, name: S) -> Option<usize> {
         self.index_of(name)
             .and_then(|i| self.source_indices.get(i).copied())
     }
 
-    // pub fn source_indices_of<'a, S: AsRef<str>>(
-    //     &'a self,
-    //     name: S,
-    // ) -> Option<impl Iterator<Item = &'a str> + DoubleEndedIterator + ExactSizeIterator> {
-    //     if let Some(arg) = self.args.get(name.as_ref()) {
-    //         fn to_usize(i: &usize) -> usize {
-    //             *i
-    //         }
-    //         let to_usize: fn(&usize) -> usize = to_usize; // coerce to fn pointer
-    //         return Some(arg.indices.iter().map(to_usize));
-    //     }
-    //     None
-    // }
+    /// Gets all indices of the argument in respect to where they occurred in
+    /// the input argv array.
+    ///
+    /// See [`ArgMatches::index_of`] and [`ArgMatches::indices_of`] for usage
+    /// examples and more details.
+    ///
+    /// [`ArgMatches::index_of`]: ./struct.ArgMatches.html#method.index_of
+    /// [`ArgMatches::indices_of`]: ./struct.ArgMatches.html#method.indices_of
+    pub fn source_indices_of<S: AsRef<str>>(
+        &'a self,
+        name: S,
+    ) -> Option<impl DoubleEndedIterator<Item = usize> + 'a> {
+        if let Some(arg) = self.args.get(name.as_ref()) {
+            return Some(
+                arg.indices
+                    .iter()
+                    .filter_map(move |&i| self.source_indices.get(i).copied()),
+            );
+        }
+        None
+    }
 
     /// Because [`Subcommand`]s are essentially "sub-[`App`]s" they have their own [`ArgMatches`]
     /// as well. This method returns the [`ArgMatches`] for a particular subcommand or `None` if
