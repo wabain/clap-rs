@@ -75,7 +75,6 @@ where
     cache: Option<&'a str>,
     pub help_message: Option<&'a str>,
     pub version_message: Option<&'a str>,
-    cur_idx: Cell<usize>,
 }
 
 impl<'a, 'b> Parser<'a, 'b>
@@ -86,7 +85,6 @@ where
         Parser {
             meta: AppMeta::with_name(n),
             g_settings: AppFlags::zeroed(),
-            cur_idx: Cell::new(0),
             ..Default::default()
         }
     }
@@ -139,26 +137,6 @@ where
             Ok(file) => file,
         };
         self.gen_completions_to(for_shell, &mut file)
-    }
-
-    fn new_logical_idx_at(&self, matcher: &mut ArgMatcher, iter_idx: usize) {
-        self.cur_idx.set(self.cur_idx.get() + 1);
-
-        if matcher.0.source_indices.len() == 0 {
-            matcher.0.source_indices.push(0);
-        }
-
-        let src_idx = iter_idx + 1;
-        matcher.0.source_indices.push(src_idx);
-
-        debugln!(
-            "Parser::new_logical_idx_at: logical={}, iter={}, src={}",
-            self.cur_idx.get(),
-            iter_idx,
-            src_idx,
-        );
-
-        debug_assert_eq!(self.cur_idx.get(), matcher.0.source_indices.len() - 1);
     }
 
     #[inline]
@@ -1658,7 +1636,7 @@ where
         debugln!("Parser::parse_long_arg;");
 
         // Update the current index
-        self.new_logical_idx_at(matcher, it.index());
+        matcher.new_logical_index_at(it.index());
 
         let mut val = None;
         debug!("Parser::parse_long_arg: Does it contain '='...");
@@ -1752,7 +1730,7 @@ where
             debugln!("Parser::parse_short_arg:iter:{}", c);
 
             // update each index because `-abcd` is four indices to clap
-            self.new_logical_idx_at(matcher, iter_idx);
+            matcher.new_logical_index_at(iter_idx);
 
             // Check for matching short options, and return the name if there is no trailing
             // concatenated value: -oval
@@ -1934,7 +1912,7 @@ where
         debugln!("Parser::add_single_val_to_arg: adding val...{:?}", v);
 
         // update the current index because each value is a distinct index to clap
-        self.new_logical_idx_at(matcher, iter_idx);
+        matcher.new_logical_index_at(iter_idx);
 
         // @TODO @docs @p4: docs for indices should probably note that a terminator isn't a value
         // and therefore not reported in indices
@@ -1945,7 +1923,7 @@ where
         }
 
         matcher.add_val_to(arg.name(), v);
-        matcher.add_index_to(arg.name(), self.cur_idx.get());
+        matcher.add_index_to(arg.name());
 
         // Increment or create the group "args"
         if let Some(grps) = self.groups_for_arg(arg.name()) {
@@ -1968,7 +1946,7 @@ where
         debugln!("Parser::parse_flag;");
 
         matcher.inc_occurrence_of(flag.b.name);
-        matcher.add_index_to(flag.b.name, self.cur_idx.get());
+        matcher.add_index_to(flag.b.name);
 
         // Increment or create the group "args"
         self.groups_for_arg(flag.b.name)

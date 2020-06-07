@@ -76,6 +76,27 @@ fn index_flags() {
 }
 
 #[test]
+fn index_repeated_parses() {
+    let mut app = App::new("ind")
+        .arg(Arg::with_name("exclude").short("e").multiple(true))
+        .arg(Arg::with_name("include").short("i").multiple(true));
+
+    let m = app
+        .get_matches_from_safe_borrow(vec!["ind", "-e", "-i", "-e", "-e", "-i"])
+        .unwrap();
+
+    assert_eq!(m.index_of("exclude"), Some(1));
+    assert_eq!(m.index_of("include"), Some(2));
+
+    let m = app
+        .get_matches_from_safe_borrow(vec!["ind", "-e", "-i", "-e", "-e", "-i"])
+        .unwrap();
+
+    assert_eq!(m.index_of("exclude"), Some(1));
+    assert_eq!(m.index_of("include"), Some(2));
+}
+
+#[test]
 fn indices_mult_flags() {
     let m = App::new("ind")
         .arg(Arg::with_name("exclude").short("e").multiple(true))

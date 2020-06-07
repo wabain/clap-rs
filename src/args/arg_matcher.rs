@@ -12,17 +12,36 @@ use args::{ArgMatches, MatchedArg, SubCommand};
 
 #[doc(hidden)]
 #[allow(missing_debug_implementations)]
-pub struct ArgMatcher<'a>(pub ArgMatches<'a>);
-
-impl<'a> Default for ArgMatcher<'a> {
-    fn default() -> Self {
-        ArgMatcher(ArgMatches::default())
-    }
-}
+#[derive(Default)]
+pub struct ArgMatcher<'a>(pub ArgMatches<'a>, usize);
 
 impl<'a> ArgMatcher<'a> {
     pub fn new() -> Self {
         ArgMatcher::default()
+    }
+
+    pub(crate) fn index(&self) -> usize {
+        self.1
+    }
+
+    pub(crate) fn new_logical_index_at(&mut self, iter_idx: usize) {
+        self.1 += 1;
+
+        if self.0.source_indices.len() == 0 {
+            self.0.source_indices.push(0);
+        }
+
+        let src_idx = iter_idx + 1;
+        self.0.source_indices.push(src_idx);
+
+        debugln!(
+            "ArgMatcher::new_logical_idx_at: logical={}, iter={}, src={}",
+            self.index(),
+            iter_idx,
+            src_idx,
+        );
+
+        debug_assert_eq!(self.index(), self.0.source_indices.len() - 1);
     }
 
     pub fn process_arg_overrides<'b>(
@@ -137,7 +156,7 @@ impl<'a> ArgMatcher<'a> {
             }
         }
         if let Some(ref mut sc) = self.0.subcommand {
-            let mut am = ArgMatcher(mem::replace(&mut sc.matches, ArgMatches::new()));
+            let mut am = ArgMatcher(mem::replace(&mut sc.matches, ArgMatches::new()), 0);
             am.fill_in_global_values(global_arg_vec, vals_map);
             mem::swap(&mut am.0, &mut sc.matches);
         }
@@ -227,7 +246,8 @@ impl<'a> ArgMatcher<'a> {
         ma.vals.push(val.to_owned());
     }
 
-    pub fn add_index_to(&mut self, arg: &'a str, idx: usize) {
+    pub fn add_index_to(&mut self, arg: &'a str) {
+        let idx = self.index();
         let ma = self.entry(arg).or_insert(MatchedArg {
             occurs: 0,
             indices: Vec::with_capacity(1),
