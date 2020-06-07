@@ -65,6 +65,8 @@ pub struct ArgMatches<'a> {
     pub subcommand: Option<Box<SubCommand<'a>>>,
     #[doc(hidden)]
     pub usage: Option<String>,
+    #[doc(hidden)]
+    pub source_indices: Vec<usize>,
 }
 
 impl<'a> Default for ArgMatches<'a> {
@@ -73,6 +75,7 @@ impl<'a> Default for ArgMatches<'a> {
             args: HashMap::new(),
             subcommand: None,
             usage: None,
+            source_indices: Vec::new(),
         }
     }
 }
@@ -391,7 +394,7 @@ impl<'a> ArgMatches<'a> {
     /// # Examples
     ///
     /// The argv indices are listed in the comments below. See how they correspond to the clap
-    /// indices. Note that if it's not listed in a clap index, this is becuase it's not saved in
+    /// indices. Note that if it's not listed in a clap index, this is because it's not saved in
     /// in an `ArgMatches` struct for querying.
     ///
     /// ```rust
@@ -403,11 +406,14 @@ impl<'a> ArgMatches<'a> {
     ///         .short("o")
     ///         .takes_value(true))
     ///     .get_matches_from(vec!["myapp", "-f", "-o", "val"]);
-    ///             // ARGV idices: ^0       ^1    ^2    ^3
-    ///             // clap idices:          ^1          ^3
+    ///            // ARGV indices: ^0       ^1    ^2    ^3
+    ///            // clap indices:          ^1          ^3
     ///
     /// assert_eq!(m.index_of("flag"), Some(1));
+    /// assert_eq!(m.source_index_of("flag"), Some(1));
+    ///
     /// assert_eq!(m.index_of("option"), Some(3));
+    /// assert_eq!(m.source_index_of("option"), Some(3));
     /// ```
     ///
     /// Now notice, if we use one of the other styles of options:
@@ -421,11 +427,14 @@ impl<'a> ArgMatches<'a> {
     ///         .short("o")
     ///         .takes_value(true))
     ///     .get_matches_from(vec!["myapp", "-f", "-o=val"]);
-    ///             // ARGV idices: ^0       ^1    ^2
-    ///             // clap idices:          ^1       ^3
+    ///            // ARGV indices: ^0       ^1    ^2
+    ///            // clap indices:          ^1       ^3
     ///
     /// assert_eq!(m.index_of("flag"), Some(1));
+    /// assert_eq!(m.source_index_of("flag"), Some(1));
+    ///
     /// assert_eq!(m.index_of("option"), Some(3));
+    /// assert_eq!(m.source_index_of("option"), Some(2));
     /// ```
     ///
     /// Things become much more complicated, or clear if we look at a more complex combination of
@@ -444,15 +453,23 @@ impl<'a> ArgMatches<'a> {
     ///         .short("o")
     ///         .takes_value(true))
     ///     .get_matches_from(vec!["myapp", "-fzF", "-oval"]);
-    ///             // ARGV idices: ^0      ^1       ^2
-    ///             // clap idices:         ^1,2,3    ^5
-    ///             //
-    ///             // clap sees the above as 'myapp -f -z -F -o val'
-    ///             //                         ^0    ^1 ^2 ^3 ^4 ^5
+    ///            // ARGV indices: ^0      ^1       ^2
+    ///            // clap indices:         ^1,2,3    ^5
+    ///            //
+    ///            // clap sees the above as 'myapp -f -z -F -o val'
+    ///            //                         ^0    ^1 ^2 ^3 ^4 ^5
+    ///
     /// assert_eq!(m.index_of("flag"), Some(1));
+    /// assert_eq!(m.source_index_of("flag"), Some(1));
+    ///
     /// assert_eq!(m.index_of("flag2"), Some(3));
+    /// assert_eq!(m.source_index_of("flag2"), Some(1));
+    ///
     /// assert_eq!(m.index_of("flag3"), Some(2));
+    /// assert_eq!(m.source_index_of("flag3"), Some(1));
+    ///
     /// assert_eq!(m.index_of("option"), Some(5));
+    /// assert_eq!(m.source_index_of("option"), Some(2));
     /// ```
     ///
     /// One final combination of flags/options to see how they combine:
@@ -471,15 +488,23 @@ impl<'a> ArgMatches<'a> {
     ///         .takes_value(true)
     ///         .multiple(true))
     ///     .get_matches_from(vec!["myapp", "-fzFoval"]);
-    ///             // ARGV idices: ^0       ^1
-    ///             // clap idices:          ^1,2,3^5
-    ///             //
-    ///             // clap sees the above as 'myapp -f -z -F -o val'
-    ///             //                         ^0    ^1 ^2 ^3 ^4 ^5
+    ///            // ARGV indices: ^0       ^1
+    ///            // clap indices:          ^1,2,3^5
+    ///            //
+    ///            // clap sees the above as 'myapp -f -z -F -o val'
+    ///            //                         ^0    ^1 ^2 ^3 ^4 ^5
+    ///
     /// assert_eq!(m.index_of("flag"), Some(1));
+    /// assert_eq!(m.source_index_of("flag"), Some(1));
+    ///
     /// assert_eq!(m.index_of("flag2"), Some(3));
+    /// assert_eq!(m.source_index_of("flag2"), Some(1));
+    ///
     /// assert_eq!(m.index_of("flag3"), Some(2));
+    /// assert_eq!(m.source_index_of("flag3"), Some(1));
+    ///
     /// assert_eq!(m.index_of("option"), Some(5));
+    /// assert_eq!(m.source_index_of("option"), Some(1));
     /// ```
     ///
     /// The last part to mention is when values are sent in multiple groups with a [delimiter].
@@ -492,12 +517,14 @@ impl<'a> ArgMatches<'a> {
     ///         .takes_value(true)
     ///         .multiple(true))
     ///     .get_matches_from(vec!["myapp", "-o=val1,val2,val3"]);
-    ///             // ARGV idices: ^0       ^1
-    ///             // clap idices:             ^2   ^3   ^4
-    ///             //
-    ///             // clap sees the above as 'myapp -o val1 val2 val3'
-    ///             //                         ^0    ^1 ^2   ^3   ^4
+    ///            // ARGV indices: ^0       ^1
+    ///            // clap indices:             ^2   ^3   ^4
+    ///            //
+    ///            // clap sees the above as 'myapp -o val1 val2 val3'
+    ///            //                         ^0    ^1 ^2   ^3   ^4
+    ///
     /// assert_eq!(m.index_of("option"), Some(2));
+    /// assert_eq!(m.source_index_of("option"), Some(1));
     /// ```
     /// [`ArgMatches`]: ./struct.ArgMatches.html
     /// [delimiter]: ./struct.Arg.html#method.value_delimiter
@@ -595,6 +622,26 @@ impl<'a> ArgMatches<'a> {
         }
         None
     }
+
+    #[allow(missing_docs)]
+    pub fn source_index_of<S: AsRef<str>>(&self, name: S) -> Option<usize> {
+        self.index_of(name)
+            .and_then(|i| self.source_indices.get(i).copied())
+    }
+
+    // pub fn source_indices_of<'a, S: AsRef<str>>(
+    //     &'a self,
+    //     name: S,
+    // ) -> Option<impl Iterator<Item = &'a str> + DoubleEndedIterator + ExactSizeIterator> {
+    //     if let Some(arg) = self.args.get(name.as_ref()) {
+    //         fn to_usize(i: &usize) -> usize {
+    //             *i
+    //         }
+    //         let to_usize: fn(&usize) -> usize = to_usize; // coerce to fn pointer
+    //         return Some(arg.indices.iter().map(to_usize));
+    //     }
+    //     None
+    // }
 
     /// Because [`Subcommand`]s are essentially "sub-[`App`]s" they have their own [`ArgMatches`]
     /// as well. This method returns the [`ArgMatches`] for a particular subcommand or `None` if

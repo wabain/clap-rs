@@ -6,7 +6,7 @@ use std::ffi::{OsStr, OsString};
 use std::fmt::Display;
 use std::fs::File;
 use std::io::{self, BufWriter, Write};
-use std::iter::Peekable;
+use std::iter::{Enumerate, Peekable};
 #[cfg(all(
     feature = "debug",
     not(any(target_os = "windows", target_arch = "wasm32"))
@@ -76,6 +76,7 @@ where
     pub help_message: Option<&'a str>,
     pub version_message: Option<&'a str>,
     cur_idx: Cell<usize>,
+    src_start: Option<usize>,
 }
 
 impl<'a, 'b> Parser<'a, 'b>
@@ -139,6 +140,24 @@ where
             Ok(file) => file,
         };
         self.gen_completions_to(for_shell, &mut file)
+    }
+
+    fn new_logical_idx_with_src(&self, matcher: &mut ArgMatcher, source_index: usize) {
+        if matcher.0.source_indices.len() == 0 {
+            matcher.0.source_indices.push(0);
+        }
+
+        self.cur_idx.set(self.cur_idx.get() + 1);
+        matcher.0.source_indices.push(source_index + 1);
+
+        debugln!(
+            "Parser::new_logical_idx_with_src: logical={}, iter={}, src={}",
+            self.cur_idx.get(),
+            source_index,
+            source_index + 1,
+        );
+
+        debug_assert_eq!(self.cur_idx.get(), matcher.0.source_indices.len() - 1);
     }
 
     #[inline]
@@ -883,7 +902,7 @@ where
     pub fn get_matches_with<I, T>(
         &mut self,
         matcher: &mut ArgMatcher<'a>,
-        it: &mut Peekable<I>,
+        it: &mut dyn Peek<Inner = I, Item = T>,
     ) -> ClapResult<()>
     where
         I: Iterator<Item = T>,
@@ -908,6 +927,9 @@ where
         // necessary
         self.create_help_and_version();
 
+        let mut it = ParseCursor::new(self.src_start, it);
+        let it = &mut it;
+
         let mut subcmd_name: Option<String> = None;
         let mut needs_val_of: ParseResult<'a> = ParseResult::NotFound;
         let mut pos_counter = 1;
@@ -915,9 +937,10 @@ where
         while let Some(arg) = it.next() {
             let arg_os = arg.into();
             debugln!(
-                "Parser::get_matches_with: Begin parsing '{:?}' ({:?})",
+                "Parser::get_matches_with: Begin parsing '{:?}' ({:?}) at {}",
                 arg_os,
-                &*arg_os.as_bytes()
+                &*arg_os.as_bytes(),
+                it.index(),
             );
 
             self.unset(AS::ValidNegNumFound);
@@ -986,7 +1009,7 @@ where
                         // Try to parse short args like normal, if AllowLeadingHyphen or
                         // AllowNegativeNumbers is set, parse_short_arg will *not* throw
                         // an error, and instead return Ok(None)
-                        needs_val_of = self.parse_short_arg(matcher, &arg_os)?;
+                        needs_val_of = self.parse_short_arg(matcher, &arg_os, it.index())?;
                         // If it's None, we then check if one of those two AppSettings was set
                         debugln!(
                             "Parser:get_matches_with: After parse_short_arg {:?}",
@@ -1020,7 +1043,7 @@ where
                             .find(|o| o.b.name == name)
                             .expect(INTERNAL_ERROR_MSG);
                         // get the OptBuilder so we can check the settings
-                        needs_val_of = self.add_val_to_arg(arg, &arg_os, matcher)?;
+                        needs_val_of = self.add_val_to_arg(arg, &arg_os, matcher, it.index())?;
                         // get the next value from the iterator
                         continue;
                     }
@@ -1117,7 +1140,7 @@ where
                     }
                     self.cache = Some(p.b.name);
                 }
-                let _ = self.add_val_to_arg(p, &arg_os, matcher)?;
+                let _ = self.add_val_to_arg(p, &arg_os, matcher, it.index())?;
 
                 matcher.inc_occurrence_of(p.b.name);
                 let _ = self
@@ -1325,7 +1348,7 @@ where
         &mut self,
         sc_name: &str,
         matcher: &mut ArgMatcher<'a>,
-        it: &mut Peekable<I>,
+        it: &mut ParseCursor<I>,
     ) -> ClapResult<()>
     where
         I: Iterator<Item = T>,
@@ -1379,6 +1402,7 @@ where
                 sc.p.meta.name
             );
             debugln!("Parser::parse_subcommand: sc settings={:#?}", sc.p.settings);
+            sc.p.src_start = it.running_index();
             sc.p.get_matches_with(&mut sc_matcher, it)?;
             matcher.subcommand(SubCommand {
                 name: sc.p.meta.name.clone(),
@@ -1615,7 +1639,7 @@ where
         &mut self,
         matcher: &mut ArgMatcher<'a>,
         full_arg: &OsStr,
-        it: &mut Peekable<I>,
+        it: &mut ParseCursor<I>,
     ) -> ClapResult<ParseResult<'a>>
     where
         I: Iterator<Item = T>,
@@ -1625,7 +1649,7 @@ where
         debugln!("Parser::parse_long_arg;");
 
         // Update the current index
-        self.cur_idx.set(self.cur_idx.get() + 1);
+        self.new_logical_idx_with_src(matcher, it.index());
 
         let mut val = None;
         debug!("Parser::parse_long_arg: Does it contain '='...");
@@ -1645,7 +1669,7 @@ where
                 opt.to_string()
             );
             self.settings.set(AS::ValidArgFound);
-            let ret = self.parse_opt(val, opt, val.is_some(), matcher)?;
+            let ret = self.parse_opt(val, opt, val.is_some(), matcher, it.index())?;
             if self.cache.map_or(true, |name| name != opt.b.name) {
                 self.cache = Some(opt.b.name);
             }
@@ -1691,6 +1715,7 @@ where
         &mut self,
         matcher: &mut ArgMatcher<'a>,
         full_arg: &OsStr,
+        src_idx: usize,
     ) -> ClapResult<ParseResult<'a>> {
         debugln!("Parser::parse_short_arg: full_arg={:?}", full_arg);
         let arg_os = full_arg.trim_left_matches(b'-');
@@ -1718,7 +1743,7 @@ where
             debugln!("Parser::parse_short_arg:iter:{}", c);
 
             // update each index because `-abcd` is four indices to clap
-            self.cur_idx.set(self.cur_idx.get() + 1);
+            self.new_logical_idx_with_src(matcher, src_idx);
 
             // Check for matching short options, and return the name if there is no trailing
             // concatenated value: -oval
@@ -1749,7 +1774,7 @@ where
                 };
 
                 // Default to "we're expecting a value later"
-                let ret = self.parse_opt(val, opt, false, matcher)?;
+                let ret = self.parse_opt(val, opt, false, matcher, src_idx)?;
 
                 if self.cache.map_or(true, |name| name != opt.b.name) {
                     self.cache = Some(opt.b.name);
@@ -1787,6 +1812,7 @@ where
         opt: &OptBuilder<'a, 'b>,
         had_eq: bool,
         matcher: &mut ArgMatcher<'a>,
+        src_idx: usize,
     ) -> ClapResult<ParseResult<'a>> {
         debugln!("Parser::parse_opt; opt={}, val={:?}", opt.b.name, val);
         debugln!("Parser::parse_opt; opt.settings={:?}", opt.b.settings);
@@ -1814,7 +1840,7 @@ where
                 fv,
                 fv.starts_with(&[b'='])
             );
-            self.add_val_to_arg(opt, v, matcher)?;
+            self.add_val_to_arg(opt, v, matcher, src_idx)?;
         } else if needs_eq && !(empty_vals || min_vals_zero) {
             sdebugln!("None, but requires equals...Error");
             return Err(Error::empty_value(
@@ -1849,6 +1875,7 @@ where
         arg: &A,
         val: &OsStr,
         matcher: &mut ArgMatcher<'a>,
+        src_idx: usize,
     ) -> ClapResult<ParseResult<'a>>
     where
         A: AnyArg<'a, 'b> + Display,
@@ -1862,11 +1889,11 @@ where
         if !(self.is_set(AS::TrailingValues) && self.is_set(AS::DontDelimitTrailingValues)) {
             if let Some(delim) = arg.val_delim() {
                 if val.is_empty() {
-                    Ok(self.add_single_val_to_arg(arg, val, matcher)?)
+                    Ok(self.add_single_val_to_arg(arg, val, matcher, src_idx)?)
                 } else {
                     let mut iret = ParseResult::ValuesDone;
                     for v in val.split(delim as u32 as u8) {
-                        iret = self.add_single_val_to_arg(arg, v, matcher)?;
+                        iret = self.add_single_val_to_arg(arg, v, matcher, src_idx)?;
                     }
                     // If there was a delimiter used, we're not looking for more values
                     if val.contains_byte(delim as u32 as u8)
@@ -1877,10 +1904,10 @@ where
                     Ok(iret)
                 }
             } else {
-                self.add_single_val_to_arg(arg, val, matcher)
+                self.add_single_val_to_arg(arg, val, matcher, src_idx)
             }
         } else {
-            self.add_single_val_to_arg(arg, val, matcher)
+            self.add_single_val_to_arg(arg, val, matcher, src_idx)
         }
     }
 
@@ -1889,6 +1916,7 @@ where
         arg: &A,
         v: &OsStr,
         matcher: &mut ArgMatcher<'a>,
+        src_idx: usize,
     ) -> ClapResult<ParseResult<'a>>
     where
         A: AnyArg<'a, 'b> + Display,
@@ -1897,7 +1925,7 @@ where
         debugln!("Parser::add_single_val_to_arg: adding val...{:?}", v);
 
         // update the current index because each value is a distinct index to clap
-        self.cur_idx.set(self.cur_idx.get() + 1);
+        self.new_logical_idx_with_src(matcher, src_idx);
 
         // @TODO @docs @p4: docs for indices should probably note that a terminator isn't a value
         // and therefore not reported in indices
@@ -2020,13 +2048,17 @@ where
 
     pub fn add_defaults(&mut self, matcher: &mut ArgMatcher<'a>) -> ClapResult<()> {
         debugln!("Parser::add_defaults;");
+
+        // XXX
+        let src_idx = matcher.0.source_indices.last().copied().unwrap_or(0);
+
         macro_rules! add_val {
             (@default $_self:ident, $a:ident, $m:ident) => {
                 if let Some(ref val) = $a.v.default_val {
                     debugln!("Parser::add_defaults:iter:{}: has default vals", $a.b.name);
                     if $m.get($a.b.name).map(|ma| ma.vals.len()).map(|len| len == 0).unwrap_or(false) {
                         debugln!("Parser::add_defaults:iter:{}: has no user defined vals", $a.b.name);
-                        $_self.add_val_to_arg($a, OsStr::new(val), $m)?;
+                        $_self.add_val_to_arg($a, OsStr::new(val), $m, src_idx)?;
 
                         if $_self.cache.map_or(true, |name| name != $a.name()) {
                             $_self.cache = Some($a.name());
@@ -2036,7 +2068,7 @@ where
                     } else {
                         debugln!("Parser::add_defaults:iter:{}: wasn't used", $a.b.name);
 
-                        $_self.add_val_to_arg($a, OsStr::new(val), $m)?;
+                        $_self.add_val_to_arg($a, OsStr::new(val), $m, src_idx)?;
 
                         if $_self.cache.map_or(true, |name| name != $a.name()) {
                             $_self.cache = Some($a.name());
@@ -2062,7 +2094,7 @@ where
                                 false
                             };
                             if add {
-                                $_self.add_val_to_arg($a, OsStr::new(default), $m)?;
+                                $_self.add_val_to_arg($a, OsStr::new(default), $m, src_idx)?;
                                 if $_self.cache.map_or(true, |name| name != $a.name()) {
                                     $_self.cache = Some($a.name());
                                 }
@@ -2094,8 +2126,11 @@ where
     }
 
     pub fn add_env(&mut self, matcher: &mut ArgMatcher<'a>) -> ClapResult<()> {
+        // XXX
+        let src_idx = matcher.0.source_indices.last().copied().unwrap_or(0);
+
         macro_rules! add_val {
-            ($_self:ident, $a:ident, $m:ident) => {
+            ($a:ident, $m:ident) => {
                 if let Some(ref val) = $a.v.env {
                     if $m
                         .get($a.b.name)
@@ -2104,18 +2139,18 @@ where
                         .unwrap_or(false)
                     {
                         if let Some(ref val) = val.1 {
-                            $_self.add_val_to_arg($a, OsStr::new(val), $m)?;
+                            self.add_val_to_arg($a, OsStr::new(val), $m, src_idx)?;
 
-                            if $_self.cache.map_or(true, |name| name != $a.name()) {
-                                $_self.cache = Some($a.name());
+                            if self.cache.map_or(true, |name| name != $a.name()) {
+                                self.cache = Some($a.name());
                             }
                         }
                     } else {
                         if let Some(ref val) = val.1 {
-                            $_self.add_val_to_arg($a, OsStr::new(val), $m)?;
+                            self.add_val_to_arg($a, OsStr::new(val), $m, src_idx)?;
 
-                            if $_self.cache.map_or(true, |name| name != $a.name()) {
-                                $_self.cache = Some($a.name());
+                            if self.cache.map_or(true, |name| name != $a.name()) {
+                                self.cache = Some($a.name());
                             }
                         }
                     }
@@ -2124,10 +2159,10 @@ where
         }
 
         for o in &self.opts {
-            add_val!(self, o, matcher);
+            add_val!(o, matcher);
         }
         for p in self.positionals.values() {
-            add_val!(self, p, matcher);
+            add_val!(p, matcher);
         }
         Ok(())
     }
@@ -2237,5 +2272,70 @@ where
     #[inline]
     fn contains_short(&self, s: char) -> bool {
         shorts!(self).any(|arg_s| arg_s == &s)
+    }
+}
+
+pub trait Peek: Iterator {
+    type Inner: Iterator<Item = Self::Item>;
+
+    fn peek(&mut self) -> Option<&Self::Item>;
+}
+
+impl<I: Iterator> Peek for Peekable<I> {
+    type Inner = I;
+
+    fn peek(&mut self) -> Option<&Self::Item> {
+        self.peek()
+    }
+}
+
+// This is essentially the same as peekable.enumerate() (minus the specialized
+// methods we don't need), but lets us retain access to the inner iterator's
+// peek() method
+struct ParseCursor<'parse, I: Iterator> {
+    index: Option<usize>,
+    iter: &'parse mut dyn Peek<Inner = I, Item = <I as Iterator>::Item>,
+}
+
+impl<'parse, I: Iterator> ParseCursor<'parse, I> {
+    fn new(
+        start: Option<usize>,
+        peekable: &'parse mut dyn Peek<Inner = I, Item = <I as Iterator>::Item>,
+    ) -> Self {
+        Self {
+            index: start,
+            iter: peekable,
+        }
+    }
+
+    fn index(&self) -> usize {
+        // Default to 0 if the first element has not been accessed yet
+        self.index.unwrap_or(0)
+    }
+
+    // XXX naming
+    fn running_index(&self) -> Option<usize> {
+        self.index
+    }
+}
+
+impl<I: Iterator> Iterator for ParseCursor<'_, I> {
+    type Item = <I as Iterator>::Item;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(item) = self.iter.next() {
+            self.index = Some(self.index.map_or(0, |i| i + 1));
+            Some(item)
+        } else {
+            None
+        }
+    }
+}
+
+impl<I: Iterator> Peek for ParseCursor<'_, I> {
+    type Inner = I;
+
+    fn peek(&mut self) -> Option<&Self::Item> {
+        self.iter.peek()
     }
 }
